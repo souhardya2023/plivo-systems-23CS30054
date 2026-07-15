@@ -1,8 +1,6 @@
-Our system implements a Hybrid FEC (Forward Error Correction) and ARQ (Automatic Repeat reQuest) protocol over UDP. 
-We strictly enforce the 2.0x bandwidth budget at the sender by tracking total bytes sent, allowing us to seamlessly attach a redundant 160-byte payload to ~95% of our outgoing packets.
-The receiver forwards all recovered frames immediately to the harness player, acting as a passthrough rather than a traditional delay buffer, since the player internally enforces deadlines.
-When the receiver detects a missing sequence number, it sends a 4-byte NACK back to the sender, periodically repeating the NACK every 40ms until the packet is recovered.
-The sender prioritizes fulfilling these NACKs in its redundant payload slot; if no NACKs are pending, it defaults to proactive FEC by sending `seq - 1`.
-Because NACKs and retransmissions take at least 1 full Round Trip Time (RTT), the system's performance is heavily bound by network jitter.
-You should grade this submission at `--delay_ms 250`, which provides enough time for robust NACK-based recovery even on the harsh 80ms max-delay bounds of Profile B.
-This architecture will break if the network drops NACKs continuously for longer than the 250ms delay budget, or if the bandwidth cap prevents retransmissions during an extremely dense burst of losses.
+Our system implements a WebRTC-style Pure Proactive FEC (Forward Error Correction) protocol with a Token-Bucket bandwidth controller over UDP, eliminating the feedback/ARQ path entirely.
+We strictly limit bandwidth at the sender using a token bucket paced at 314 bytes/frame (1.96x overhead), which allows us to send the primary packet and queue proactive FEC packets (seq - 1 and seq - 2) whenever tokens accumulate.
+The receiver is a zero-latency, high-speed passthrough that forwards any newly received sequence numbers immediately to the harness player, avoiding duplicates using a simple 64KB lookup array.
+By removing the feedack loop and NACKs altogether, we avoided RTT latency bottlenecks and achieved immediate, zero-delay recovery on packet losses.
+You should grade this submission at `--delay_ms 50` for Profile A and `--delay_ms 100` for Profile B.
+This architecture will break if a network exhibits dense burst drops of more than 2 consecutive packets, or if delay spikes exceed the 50ms/100ms playout windows.

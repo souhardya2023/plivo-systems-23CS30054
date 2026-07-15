@@ -10,4 +10,4 @@ receiver: receiver.c
 	$(CC) $(CFLAGS) -o receiver receiver.c
 
 clean:
-	rm -f sender receiver
+	rm -f sender receiver playout_log.json relay_stats.json

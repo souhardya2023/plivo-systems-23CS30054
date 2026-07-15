@@ -36,7 +36,9 @@
             margin: 0;
             background: linear-gradient(to right, var(--primary), var(--secondary));
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
+            color: transparent;
             font-weight: 800;
         }
 
@@ -147,40 +149,38 @@
 
         <div class="grid">
             <div class="card">
-                <h2>Custom Wire Protocol</h2>
-                <p>To adhere to the 2.00x bandwidth constraint (max 320 bytes per frame), naive duplication was impossible due to the size of sequence headers. We designed a custom packed wire format: <code>[4-byte Seq] [1-byte Config] [160-byte Primary Payload] [1-byte Offset] [160-byte Redundant Payload]</code>.</p>
-                <p>The sender dynamically monitors the total byte budget. It attaches the redundant payload to approximately 95% of outgoing packets, ensuring the overall bandwidth overhead securely peaks at <strong>1.94x</strong>.</p>
+                <h2>Adaptive Token-Bucket Pacing</h2>
+                <p>To strictly adhere to the 2.00x bandwidth constraint (max 320 bytes per frame), we designed a token-bucket rate limiter paced at 314 bytes/frame. This controller acts as a strict pacing buffer, guaranteeing that our bandwidth overhead securely peaks at <strong>1.96x</strong> without ever violating the 2.00x cap.</p>
             </div>
 
             <div class="card">
-                <h2>Hybrid FEC + ARQ</h2>
-                <p>We implemented a two-pronged error recovery strategy. By default, the sender uses <strong>Forward Error Correction (FEC)</strong> by proactively attaching the payload of <code>seq - 1</code> to the redundant slot. This instantly recovers from isolated packet drops without requiring a round-trip.</p>
-                <p>To combat burst losses, we implemented a robust <strong>NACK-based ARQ</strong> system. The receiver tracks a sliding window of missing sequences and periodically requests them from the sender via the feedback port.</p>
+                <h2>WebRTC-Style Pure FEC</h2>
+                <p>We implemented a zero-RTT error recovery strategy utilizing Forward Error Correction (FEC). The sender queues redundant payloads for <code>seq - 1</code> and <code>seq - 2</code>. When the token bucket accumulates enough tokens, these redundant payloads are transmitted as separate UDP packets. This provides immediate, zero-delay recovery on packet loss.</p>
             </div>
         </div>
 
         <div class="card">
             <h2>Receiver Zero-Delay Jitter Buffer</h2>
-            <p>A critical architectural realization was that the harness player itself acts as the definitive jitter buffer. Rather than artificially holding packets at the receiver to smooth out network delays, the receiver was engineered as a high-speed passthrough. As soon as a datagram is parsed, any valid payloads (primary or successfully recovered redundant frames) are immediately blasted to the player port. This completely offloads timing logic and eliminates artificial delay introduced by our receiver layer.</p>
+            <p>A critical architectural realization was that the harness player itself acts as the definitive jitter buffer. Rather than artificially holding packets at the receiver to smooth out network delays, the receiver was engineered as a high-speed passthrough. Any newly received sequence numbers are forwarded immediately to the player, while duplicate frames are filtered out using a lightweight 64KB array.</p>
         </div>
 
         <div class="card">
-            <h2>Robust NACK Sliding Window</h2>
-            <p>A naive NACK implementation fails when the NACK packets themselves are dropped by the relay network. To counter this, the receiver uses a highly resilient sliding window mechanism. It evaluates the reception state of the last 100 sequence numbers. If a gap persists, it re-transmits the NACK every 40ms (2 packet intervals). The sender maintains a <code>last_sent</code> deduplication array to ensure it doesn't flood the network with redundant payloads even if it receives identical NACKs repeatedly.</p>
+            <h2>Zero Feedback (Zero-RTT Overhead)</h2>
+            <p>Traditional NACK-based ARQ is highly bottlenecked by round-trip times (RTT) and jitter, requiring large playout delays to be effective. By eliminating the feedback path entirely, we completely avoided down_bytes overhead (feedback overhead is 0B) and freed up critical bandwidth budget to send more proactive FEC packets. This reduced playout delay down to 100ms on Profile B and 50ms on Profile A.</p>
         </div>
 
         <div class="grid" style="margin-bottom: 2rem;">
             <div class="metric">
-                <div class="metric-value">0.20%</div>
+                <div class="metric-value">0.80%</div>
                 <div class="metric-label">Miss Rate on Profile B</div>
             </div>
             <div class="metric">
-                <div class="metric-value">1.94x</div>
+                <div class="metric-value">1.96x</div>
                 <div class="metric-label">Bandwidth Overhead</div>
             </div>
             <div class="metric">
-                <div class="metric-value">250ms</div>
-                <div class="metric-label">Optimal Delay</div>
+                <div class="metric-value">100ms</div>
+                <div class="metric-label">Optimal Delay (B)</div>
             </div>
         </div>
 
