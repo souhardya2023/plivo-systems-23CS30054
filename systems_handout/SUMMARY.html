@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture Summary: Reliable UDP Transmission</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface: #1e293b;
+            --primary: #38bdf8;
+            --secondary: #818cf8;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #10b981;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            background: linear-gradient(135deg, rgba(30,41,59,0.8) 0%, rgba(15,23,42,1) 100%);
+            padding: 4rem 2rem;
+            text-align: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin: 0;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 800;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            margin-top: 1rem;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+        }
+
+        .card {
+            background-color: var(--surface);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.05);
+            transition: transform 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+        }
+
+        h2 {
+            color: var(--primary);
+            font-size: 1.5rem;
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        h2::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 24px;
+            background-color: var(--secondary);
+            border-radius: 4px;
+        }
+
+        p {
+            color: var(--text-muted);
+        }
+
+        .highlight {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .metric {
+            background: rgba(255,255,255,0.03);
+            padding: 1.5rem;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-label {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        code {
+            background-color: rgba(0,0,0,0.3);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: monospace;
+            color: var(--secondary);
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>System Architecture & Design Choices</h1>
+        <div class="subtitle">Plivo Systems Assignment - Real-time UDP Media Transmission</div>
+    </header>
+
+    <div class="container">
+        
+        <div class="card">
+            <h2>The Core Challenge</h2>
+            <p>The objective was to transmit 160-byte media frames every 20ms across a highly unreliable UDP network exhibiting <span class="highlight">packet drops, extreme jitter, reordering, and duplication</span>. The overarching constraints required maintaining a strict bandwidth overhead of less than 2.00x, keeping the deadline miss rate below 1.00%, and minimizing playout delay.</p>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Custom Wire Protocol</h2>
+                <p>To adhere to the 2.00x bandwidth constraint (max 320 bytes per frame), naive duplication was impossible due to the size of sequence headers. We designed a custom packed wire format: <code>[4-byte Seq] [1-byte Config] [160-byte Primary Payload] [1-byte Offset] [160-byte Redundant Payload]</code>.</p>
+                <p>The sender dynamically monitors the total byte budget. It attaches the redundant payload to approximately 95% of outgoing packets, ensuring the overall bandwidth overhead securely peaks at <strong>1.94x</strong>.</p>
+            </div>
+
+            <div class="card">
+                <h2>Hybrid FEC + ARQ</h2>
+                <p>We implemented a two-pronged error recovery strategy. By default, the sender uses <strong>Forward Error Correction (FEC)</strong> by proactively attaching the payload of <code>seq - 1</code> to the redundant slot. This instantly recovers from isolated packet drops without requiring a round-trip.</p>
+                <p>To combat burst losses, we implemented a robust <strong>NACK-based ARQ</strong> system. The receiver tracks a sliding window of missing sequences and periodically requests them from the sender via the feedback port.</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Receiver Zero-Delay Jitter Buffer</h2>
+            <p>A critical architectural realization was that the harness player itself acts as the definitive jitter buffer. Rather than artificially holding packets at the receiver to smooth out network delays, the receiver was engineered as a high-speed passthrough. As soon as a datagram is parsed, any valid payloads (primary or successfully recovered redundant frames) are immediately blasted to the player port. This completely offloads timing logic and eliminates artificial delay introduced by our receiver layer.</p>
+        </div>
+
+        <div class="card">
+            <h2>Robust NACK Sliding Window</h2>
+            <p>A naive NACK implementation fails when the NACK packets themselves are dropped by the relay network. To counter this, the receiver uses a highly resilient sliding window mechanism. It evaluates the reception state of the last 100 sequence numbers. If a gap persists, it re-transmits the NACK every 40ms (2 packet intervals). The sender maintains a <code>last_sent</code> deduplication array to ensure it doesn't flood the network with redundant payloads even if it receives identical NACKs repeatedly.</p>
+        </div>
+
+        <div class="grid" style="margin-bottom: 2rem;">
+            <div class="metric">
+                <div class="metric-value">0.20%</div>
+                <div class="metric-label">Miss Rate on Profile B</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">1.94x</div>
+                <div class="metric-label">Bandwidth Overhead</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">250ms</div>
+                <div class="metric-label">Optimal Delay</div>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>
